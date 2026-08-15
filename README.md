@@ -43,11 +43,48 @@ Chinese are the defaults here.
 | Surface | |
 |---|---|
 | `tts` tool | The model can speak text on demand. |
+| `/read` | **Read-along player.** Sentence list, cursor is the playhead. |
+| `alt+r` | Open the player on the last reply. |
 | `/say` | Menu: toggle, announce mode, voices, speed, preview. |
 | `/say <text>` | Speak that text right now. |
 | `/say on` / `/say off` | Toggle without the menu. |
 | `alt+s` | Same toggle, from anywhere. |
 | End of turn | Announces the outcome. See below. |
+
+### Read-along
+
+`afplay` cannot seek, so pi-say does not try. The text is split into
+sentences, each is rendered to its own file, and every navigation command is
+really "stop, and start that other file". Sentences are the unit you actually
+want to move by — nobody rewinds a paragraph by three hundred milliseconds.
+
+Synthesis runs exactly one sentence ahead of playback, so a long message
+starts speaking immediately instead of after a ten second render.
+
+```
+/read          the last reply
+/read 3        the third most recent reply
+/read pick     choose from a list
+/read <text>   read that literal text
+```
+
+Inside the player:
+
+| Key | |
+|---|---|
+| `↑` `↓` / `j` `k` | Move the cursor. Playback keeps going. |
+| `enter` | **Read from here.** |
+| `space` | Pause / resume. |
+| `←` `→` | Previous / next sentence. |
+| `r` | Repeat the current sentence. |
+| `[` `]` | Slower / faster, applies immediately. |
+| `0`–`9` | Jump proportionally, like a video player. `5` is halfway. |
+| `esc` / `q` | Close. |
+
+The cursor follows playback until you move it yourself, at which point the
+header says `browsing` and the two positions are shown separately: `▸` marks
+what you are hearing, the highlight marks where you are looking. Press
+`enter` to bring them back together.
 
 ### Deciding what to say
 
@@ -109,7 +146,7 @@ default everywhere.
 
 ```bash
 npm install
-npm test        # 38 tests; the `say` integration ones skip off macOS
+npm test        # 50 tests; the `say` integration ones skip off macOS
 npm run typecheck
 pi -e ./extensions/index.ts
 ```
@@ -118,12 +155,14 @@ pi -e ./extensions/index.ts
 |---|---|
 | `extensions/text.ts` | Markdown stripping, script segmentation. Pure. |
 | `extensions/announce.ts` | The rule engine that decides what to say. Pure. |
+| `extensions/reader.ts` | Sentence splitting, interruptible transport. |
+| `extensions/read-along.ts` | The `/read` TUI component. |
 | `extensions/speech.ts` | `say` invocation, WAV stitching, playback queue. |
 | `extensions/config.ts` | Types, defaults, load/save. |
 | `extensions/index.ts` | Tool, command, shortcut, event wiring. |
 
-The first three have no pi dependency, which is why they are the ones with real
-test coverage.
+The pure modules are the ones with real test coverage. `pi-tui` is pinned to
+the version pi bundles; a newer one type-errors against `ctx.ui.custom()`.
 
 ## Notes
 
@@ -131,7 +170,10 @@ test coverage.
   few words is slower than a monolingual one. Runs shorter than four characters
   or words are absorbed into their neighbour to avoid exactly that.
 - Playback is serialized through a queue, so a tool call and an end-of-turn
-  announcement never talk over each other.
+  announcement never talk over each other. Opening `/read` clears that queue —
+  when you ask to read something, you want that, not the backlog.
+- Seeking during a slow render is safe: every seek bumps a generation counter
+  and stale synthesis is discarded rather than played late.
 - Korean, Thai, and other non-CJK scripts fall through to the English voice.
 
 ## License

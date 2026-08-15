@@ -34,6 +34,8 @@ import {
   type SayConfig,
   type SessionState,
 } from "./config.ts";
+import { createReadAlong, publishPlayerState } from "./read-along.ts";
+import { Reader, splitSentences } from "./reader.ts";
 import {
   createQueue,
   listVoices,
@@ -66,6 +68,24 @@ function lastAssistantText(event: any): string {
     .filter((c: { type?: string }) => c?.type === "text")
     .map((c: { text?: string }) => c.text ?? "")
     .join("\n");
+}
+
+/**
+ * Walk the session backwards and collect assistant messages, newest first.
+ * Used by /read to answer "read the last thing you said" and to offer a
+ * pick list when the interesting message is further back.
+ */
+function recentAssistantTexts(ctx: ExtensionContext, limit: number): string[] {
+  const out: string[] = [];
+  const branch = ctx.sessionManager.getBranch();
+  for (let i = branch.length - 1; i >= 0 && out.length < limit; i--) {
+    const entry = branch[i] as { type?: string; message?: { role?: string; content?: unknown } };
+    if (entry.type !== "message") continue;
+    if (entry.message?.role !== "assistant") continue;
+    const text = lastAssistantText({ message: entry.message });
+    if (text.trim()) out.push(text);
+  }
+  return out;
 }
 
 /**
@@ -303,6 +323,122 @@ export default function (pi: ExtensionAPI) {
       }
 
       speak("Build finished. \u4e09\u4e2a\u6d4b\u8bd5\u6ca1\u8fc7, want me to fix them?");
+    },
+  });
+
+  // ── /read — the read-along player ───────────────────────────────
+
+  /** The reader currently on screen, if any. One at a time. */
+  let activeReader: Reader | null = null;
+
+  async function openReadAlong(text: string, ctx: ExtensionContext): Promise<void> {
+    const clean = stripMarkdown(text);
+    if (!hasSpeakableContent(clean)) {
+      ctx.ui.notify("Nothing speakable in that message.", "warning");
+      return;
+    }
+    if (ctx.mode !== "tui") {
+      // Outside the TUI there is no cursor to follow, so just read it.
+      speak(clean);
+      return;
+    }
+
+    const cfg = config();
+    activeReader?.dispose();
+
+    // Queued speech and the reader would fight over the speakers.
+    queue.clear();
+
+    const reader = new Reader(clean, {
+      voices: { en: cfg.enVoice, zh: cfg.zhVoice },
+      speed: cfg.speed,
+      onChange: (s) => {
+        publishPlayerState(s);
+        if (currentCtx) {
+          currentCtx.ui.setStatus(
+            "pi-say",
+            s.status === "idle" || s.status === "done"
+              ? currentCtx.ui.theme.fg("success", "\u266A")
+              : currentCtx.ui.theme.fg("accent", `\u266A ${s.index + 1}/${s.total}`),
+          );
+        }
+      },
+    });
+    activeReader = reader;
+
+    try {
+      await ctx.ui.custom<void>((tui, theme, _kb, done) =>
+        createReadAlong({
+          reader,
+          theme,
+          tui,
+          done: () => done(undefined),
+          initialSpeed: cfg.speed,
+          onSpeedChange: (speed) => {
+            session.speed = speed;
+            persist();
+          },
+        }),
+      );
+    } finally {
+      reader.dispose();
+      if (activeReader === reader) activeReader = null;
+      updateStatus();
+    }
+  }
+
+  pi.registerCommand("read", {
+    description: "Read a message aloud with sentence navigation",
+    handler: async (args, ctx) => {
+      const arg = args.trim();
+
+      // Explicit text wins: /read <anything> reads exactly that.
+      if (arg && !/^\d+$/.test(arg) && arg !== "pick") {
+        await openReadAlong(arg, ctx);
+        return;
+      }
+
+      const history = recentAssistantTexts(ctx, 12);
+      if (history.length === 0) {
+        ctx.ui.notify("Nothing has been said yet.", "warning");
+        return;
+      }
+
+      // /read 3 — the third most recent reply.
+      if (/^\d+$/.test(arg)) {
+        const n = Number(arg);
+        const text = history[Math.max(0, Math.min(history.length - 1, n - 1))];
+        await openReadAlong(text, ctx);
+        return;
+      }
+
+      if (arg === "pick") {
+        const labels = history.map((t, i) => {
+          const first = splitSentences(stripMarkdown(t))[0] ?? "";
+          return `${String(i + 1).padStart(2)}  ${first.slice(0, 70)}`;
+        });
+        const chosen = await ctx.ui.select("Read which reply?", labels);
+        if (!chosen) return;
+        const idx = labels.indexOf(chosen);
+        if (idx >= 0) await openReadAlong(history[idx], ctx);
+        return;
+      }
+
+      // Bare /read — the most recent reply, which is what you want 90% of
+      // the time.
+      await openReadAlong(history[0], ctx);
+    },
+  });
+
+  pi.registerShortcut("alt+r", {
+    description: "Read the last reply aloud, with navigation",
+    handler: async (ctx) => {
+      const history = recentAssistantTexts(ctx, 1);
+      if (history.length === 0) {
+        ctx.ui.notify("Nothing has been said yet.", "warning");
+        return;
+      }
+      await openReadAlong(history[0], ctx);
     },
   });
 
