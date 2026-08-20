@@ -38,12 +38,15 @@ Accessibility → Spoken Content → System Voice → Manage Voices**, then down
 the *Premium* variants. `Zoe (Premium)` for English and `Yue (Premium)` for
 Chinese are the defaults here.
 
+**Driving it day to day: [docs/usage.md](docs/usage.md).** Keys, the four
+announce modes, recipes, and what to do when it misbehaves.
+
 ## What it does
 
 | Surface | |
 |---|---|
 | `tts` tool | The model can speak text on demand. |
-| `/read` | **Read-along player.** Sentence list, cursor is the playhead. |
+| `/read` | **Read-along player.** A transport bar; your text stays on screen. |
 | `alt+r` | Open the player on the last reply. |
 | `/say` | Menu: toggle, announce mode, voices, speed, preview. |
 | `/say <text>` | Speak that text right now. |

@@ -23,6 +23,7 @@
   },
   "files": [
     "extensions",
+    "docs",
     "README.md",
     "LICENSE"
   ],
