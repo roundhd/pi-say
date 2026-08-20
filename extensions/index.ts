@@ -46,7 +46,7 @@ import {
 import { hasSpeakableContent, stripMarkdown } from "./text.ts";
 
 const SESSION_ENTRY = "say-session";
-const ANNOUNCE_MODES: AnnounceMode[] = ["rules", "model", "off"];
+const ANNOUNCE_MODES: AnnounceMode[] = ["read", "ack", "model", "off"];
 
 // One shared runtime for every side session we spin up.
 let runtimePromise: Promise<ModelRuntime> | undefined;
@@ -279,8 +279,9 @@ export default function (pi: ExtensionAPI) {
 
       if (choice === "announce") {
         const labels: Record<AnnounceMode, string> = {
-          rules: "rules \u2014 local heuristics, no tokens",
-          model: "model \u2014 an LLM writes the line",
+          read: "read \u2014 read the whole reply, with controls",
+          ack: "ack \u2014 one line: what broke or what to decide",
+          model: "model \u2014 an LLM writes a summary line",
           off: "off \u2014 stay quiet",
         };
         const chosen = await ctx.ui.select(
@@ -486,7 +487,14 @@ export default function (pi: ExtensionAPI) {
     if (!raw.trim()) return;
 
     try {
-      if (cfg.announce === "rules") {
+      // Read the actual words. No summary can be trusted to keep the part
+      // that mattered, and you can always skip ahead.
+      if (cfg.announce === "read") {
+        await openReadAlong(raw, ctx);
+        return;
+      }
+
+      if (cfg.announce === "ack") {
         const { text } = announce(raw, { maxChars: cfg.maxAnnounceChars });
         if (text) speak(text);
         return;

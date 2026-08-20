@@ -1,18 +1,22 @@
 /**
- * The read-along UI: a scrollable sentence list where the cursor is a
- * playhead. Move the cursor, the voice follows.
+ * The read-along transport bar.
  *
- * The design goal is that navigating and listening are the same act. There
- * is no separate "select then play" step, because when you are not looking
- * at the screen the selection is invisible — the sentence you hear IS the
- * cursor.
+ * Deliberately NOT a text viewer. An earlier version rendered the sentences
+ * in a scrolling list, which was a mistake: the terminal above has already
+ * rendered that same text with syntax highlighting, tables, and colour, and
+ * this component was both duplicating it and doing it worse. Worse still,
+ * the list stole the screen, so you could not look at the good rendering
+ * while listening to it.
+ *
+ * So this is a single status line. The text stays where it already is; this
+ * just tells you where the voice is in it and takes your transport keys.
  */
 
 import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { PlayerState } from "./reader.ts";
-import { Reader } from "./reader.ts";
+import type { Reader } from "./reader.ts";
 
 const SPEEDS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5];
 
@@ -21,74 +25,50 @@ export interface ReadAlongOptions {
   theme: Theme;
   tui: TUI;
   done: () => void;
-  /** Rows of sentence list to show. */
-  rows?: number;
   onSpeedChange?: (speed: number) => void;
   initialSpeed?: number;
+  /** Start playing as soon as the bar appears. */
+  autoStart?: boolean;
 }
 
-/**
- * A `ctx.ui.custom()` component. Not a subclass of anything — the extension
- * API only needs `render`, `handleInput`, and `invalidate`.
- */
+/** A progress bar drawn in the space left over after the labels. */
+function bar(index: number, total: number, width: number): string {
+  if (width < 4 || total === 0) return "";
+  const filled = Math.round(((index + 1) / total) * width);
+  return "\u2501".repeat(filled) + "\u2500".repeat(Math.max(0, width - filled));
+}
+
 export function createReadAlong(opts: ReadAlongOptions): Component & {
   handleInput(data: string): void;
 } {
   const { reader, theme, tui, done } = opts;
-  const rows = opts.rows ?? 9;
 
-  let cursor = 0;
   let state: PlayerState = reader.state;
-  let speedIndex = Math.max(
-    0,
-    SPEEDS.indexOf(opts.initialSpeed ?? 1.0) === -1 ? 1 : SPEEDS.indexOf(opts.initialSpeed ?? 1.0),
-  );
-  let follow = true; // does the cursor chase playback?
-
-  reader.start(0);
-
-  // Playback drives the cursor unless the user has scrolled away to browse.
-  const unsubscribe = ((): (() => void) => {
-    const handler = (s: PlayerState) => {
-      state = s;
-      if (follow) cursor = s.index;
-      tui.requestRender();
-    };
-    // The Reader takes its callback at construction, so the extension wires
-    // this in; here we just keep a local updater for the state we own.
-    readAlongListeners.add(handler);
-    return () => readAlongListeners.delete(handler);
+  let speedIndex = (() => {
+    const i = SPEEDS.indexOf(opts.initialSpeed ?? 1.0);
+    return i === -1 ? 1 : i;
   })();
+  let showHelp = false;
 
-  function moveCursor(delta: number): void {
-    const n = reader.sentences.length;
-    if (n === 0) return;
-    cursor = Math.max(0, Math.min(n - 1, cursor + delta));
-    follow = false;
+  readAlongListeners.add((s) => {
+    state = s;
     tui.requestRender();
-  }
+  });
 
-  function playCursor(): void {
-    follow = true;
-    reader.seek(cursor);
-  }
+  if (opts.autoStart !== false) reader.start(0);
 
   function finish(): void {
-    unsubscribe();
+    readAlongListeners.clear();
     reader.dispose();
     done();
   }
 
   return {
-    invalidate() {
-      // Nothing cached; render builds strings fresh each frame.
-    },
+    invalidate() {},
 
     render(width: number): string[] {
       const lines: string[] = [];
-      const border = new DynamicBorder((s: string) => theme.fg("accent", s));
-
-      lines.push(...border.render(width));
+      lines.push(...new DynamicBorder((s: string) => theme.fg("accent", s)).render(width));
 
       const icon =
         state.status === "playing"
@@ -97,61 +77,47 @@ export function createReadAlong(opts: ReadAlongOptions): Component & {
             ? "\u23F8"
             : state.status === "synthesizing"
               ? "\u22EF"
-              : "\u25A0";
-      const head = ` ${icon}  ${state.index + 1}/${reader.sentences.length}   ${SPEEDS[speedIndex].toFixed(2)}x${follow ? "" : "   browsing"}`;
-      lines.push(theme.fg("accent", truncateToWidth(head, width)));
-      lines.push("");
+              : state.status === "done"
+                ? "\u2713"
+                : "\u25A0";
 
-      // Window the list so the cursor stays roughly centred.
-      const n = reader.sentences.length;
-      const half = Math.floor(rows / 2);
-      const start = Math.max(0, Math.min(Math.max(0, n - rows), cursor - half));
+      const pos = `${state.index + 1}/${state.total}`;
+      const speed = `${SPEEDS[speedIndex].toFixed(2)}x`;
+      const left = ` ${icon}  ${pos}  ${speed}  `;
+      const barWidth = Math.max(0, width - visibleWidth(left) - 1);
+      lines.push(theme.fg("accent", left) + theme.fg("dim", bar(state.index, state.total, barWidth)));
 
-      for (let i = start; i < Math.min(n, start + rows); i++) {
-        const isCursor = i === cursor;
-        const isPlaying = i === state.index && state.status !== "idle";
-
-        // Two marks, because "where I am looking" and "what I am hearing"
-        // are different things once you scroll away.
-        const mark = isPlaying ? "\u25B8" : " ";
-        const num = String(i + 1).padStart(3, " ");
-        const body = reader.sentences[i].replace(/\s+/g, " ");
-        const raw = ` ${mark}${num}  ${body}`;
-        const text = truncateToWidth(raw, width, "\u2026");
-
-        if (isCursor && isPlaying) lines.push(theme.fg("accent", theme.bold(text)));
-        else if (isCursor) lines.push(theme.fg("accent", text));
-        else if (isPlaying) lines.push(theme.fg("success", text));
-        else lines.push(theme.fg("muted", text));
+      // One line of the sentence being spoken, so you can confirm the voice
+      // is where you think it is without hunting for it in the scrollback.
+      const current = state.current.replace(/\s+/g, " ");
+      if (current) {
+        lines.push(theme.fg("muted", truncateToWidth(` ${current}`, width, "\u2026")));
       }
 
-      if (n === 0) lines.push(theme.fg("warning", " nothing speakable here"));
-
-      lines.push("");
       lines.push(
         theme.fg(
           "dim",
           truncateToWidth(
-            " \u2191\u2193 move \u2022 enter read here \u2022 space pause \u2022 \u2190\u2192 prev/next \u2022 r again \u2022 [ ] speed \u2022 esc close",
+            showHelp
+              ? " space pause \u2022 \u2190\u2192 sentence \u2022 r repeat \u2022 [ ] speed \u2022 0-9 jump \u2022 esc close"
+              : " space \u2022 \u2190\u2192 \u2022 r \u2022 [ ] \u2022 esc     (? for keys)",
             width,
           ),
         ),
       );
-      lines.push(...border.render(width));
+
+      lines.push(...new DynamicBorder((s: string) => theme.fg("accent", s)).render(width));
       return lines;
     },
 
     handleInput(data: string): void {
-      if (matchesKey(data, "escape") || matchesKey(data, "q")) return finish();
+      if (matchesKey(data, "escape") || data === "q") return finish();
 
-      if (matchesKey(data, "up") || data === "k") return moveCursor(-1);
-      if (matchesKey(data, "down") || data === "j") return moveCursor(1);
-      if (matchesKey(data, "pageUp")) return moveCursor(-rows);
-      if (matchesKey(data, "pageDown")) return moveCursor(rows);
-      if (matchesKey(data, "home")) return moveCursor(-1e9);
-      if (matchesKey(data, "end")) return moveCursor(1e9);
-
-      if (matchesKey(data, "return")) return playCursor();
+      if (data === "?") {
+        showHelp = !showHelp;
+        tui.requestRender();
+        return;
+      }
 
       if (matchesKey(data, "space")) {
         reader.toggle();
@@ -159,49 +125,29 @@ export function createReadAlong(opts: ReadAlongOptions): Component & {
         return;
       }
 
-      if (matchesKey(data, "right")) {
-        follow = true;
-        reader.next();
-        return;
-      }
-      if (matchesKey(data, "left")) {
-        follow = true;
-        reader.prev();
-        return;
-      }
-      if (data === "r") {
-        follow = true;
-        reader.again();
-        return;
-      }
+      if (matchesKey(data, "right") || matchesKey(data, "down")) return reader.next();
+      if (matchesKey(data, "left") || matchesKey(data, "up")) return reader.prev();
+      if (data === "r") return reader.again();
 
       if (data === "]" || data === "[") {
-        speedIndex = Math.max(
-          0,
-          Math.min(SPEEDS.length - 1, speedIndex + (data === "]" ? 1 : -1)),
-        );
+        speedIndex = Math.max(0, Math.min(SPEEDS.length - 1, speedIndex + (data === "]" ? 1 : -1)));
         reader.setSpeed(SPEEDS[speedIndex]);
         opts.onSpeedChange?.(SPEEDS[speedIndex]);
         tui.requestRender();
         return;
       }
 
-      // Digits jump proportionally, like a video player: 5 = halfway.
+      // Proportional jump, like a video player: 5 is halfway.
       if (/^[0-9]$/.test(data)) {
-        const n = reader.sentences.length;
-        cursor = Math.min(n - 1, Math.floor((Number(data) / 10) * n));
-        follow = true;
-        reader.seek(cursor);
-        tui.requestRender();
+        reader.seek(Math.floor((Number(data) / 10) * state.total));
       }
     },
   };
 }
 
 /**
- * Reader state fan-out. The Reader accepts a single onChange callback, but
- * both the component and the extension's status bar want to hear about it,
- * so the extension pushes updates through here.
+ * Reader state fan-out. Reader takes a single onChange callback, but the bar
+ * and the status line both want it.
  */
 export const readAlongListeners = new Set<(s: PlayerState) => void>();
 

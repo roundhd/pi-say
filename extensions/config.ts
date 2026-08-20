@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-export type AnnounceMode = "rules" | "model" | "off";
+export type AnnounceMode = "read" | "ack" | "model" | "off";
 
 export interface ModelRef {
   provider: string;
@@ -25,10 +25,15 @@ export interface SayConfig {
   /** Multiplier on the base 190 wpm rate. */
   speed: number;
   /**
-   * How the end-of-turn announcement is produced.
-   *   rules — local heuristics, zero tokens, zero latency (default)
-   *   model — a side LLM call summarizes with `announcePrompt`
+   * What happens when a turn ends.
+   *   read  — read the whole reply aloud, with transport controls (default)
+   *   ack   — one line: what broke, what you must decide, or "Done."
+   *   model — a side LLM writes a line using `announcePrompt`
    *   off   — never speak automatically; the tts tool still works
+   *
+   * `read` is the default because summarizing a technical answer into one
+   * sentence reliably produces something either useless or wrong. Reading
+   * the actual words, with the ability to skip, beats a bad summary.
    */
   announce: AnnounceMode;
   /** Only used when announce is "model". */
@@ -68,10 +73,10 @@ export const DEFAULT_ANNOUNCE_PROMPT = [
 
 export const DEFAULT_CONFIG: SayConfig = {
   enabled: true,
-  enVoice: "Ava (Premium)",
+  enVoice: "Zoe (Premium)",
   zhVoice: "Yue (Premium)",
   speed: 1.0,
-  announce: "rules",
+  announce: "read",
   announcePrompt: DEFAULT_ANNOUNCE_PROMPT,
   maxAnnounceChars: 240,
 };

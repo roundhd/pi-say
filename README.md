@@ -35,7 +35,7 @@ macOS only. Requires node 22.18 or newer.
 
 Install the good voices first — the stock ones are rough. **System Settings →
 Accessibility → Spoken Content → System Voice → Manage Voices**, then download
-the *Premium* variants. `Ava (Premium)` for English and `Yue (Premium)` for
+the *Premium* variants. `Zoe (Premium)` for English and `Yue (Premium)` for
 Chinese are the defaults here.
 
 ## What it does
@@ -68,34 +68,42 @@ starts speaking immediately instead of after a ten second render.
 /read <text>   read that literal text
 ```
 
-Inside the player:
+The player is a **single status bar**, not a text viewer. Your terminal has
+already rendered that text with syntax highlighting, tables, and colour;
+redrawing it in a plain scrolling list would be strictly worse, and would
+cover up the good rendering while you listen to it. So the bar shows only
+where the voice is, and the text stays where it is.
 
 | Key | |
 |---|---|
-| `↑` `↓` / `j` `k` | Move the cursor. Playback keeps going. |
-| `enter` | **Read from here.** |
 | `space` | Pause / resume. |
-| `←` `→` | Previous / next sentence. |
+| `←` `→` (or `↑` `↓`) | Previous / next sentence. |
 | `r` | Repeat the current sentence. |
 | `[` `]` | Slower / faster, applies immediately. |
 | `0`–`9` | Jump proportionally, like a video player. `5` is halfway. |
+| `?` | Full key list. |
 | `esc` / `q` | Close. |
 
-The cursor follows playback until you move it yourself, at which point the
-header says `browsing` and the two positions are shown separately: `▸` marks
-what you are hearing, the highlight marks where you are looking. Press
-`enter` to bring them back together.
+### What happens at the end of a turn
 
-### Deciding what to say
+Most TTS extensions summarize the assistant's final message. In practice a
+technical answer compressed to twenty words is either padding or has dropped
+the part that mattered, and you cannot tell which without reading the
+original — at which point the speech was pointless.
 
-This is the part most TTS extensions get wrong. The default behaviour is to
-summarize the assistant's final message, which means you hear a paraphrase of
-the thing you just asked for. That is noise, and noise trains you to stop
-listening.
+So the default is not to summarize. `announce: "read"` opens the read-along
+bar on the actual reply. If it turns out to be boring, `esc`. If the useful
+part is at the bottom, press `8`.
 
-`pi-say` assumes speech is only worth an interruption when it carries something
-you could not have predicted. It classifies the turn locally and speaks at most
-one line:
+| Mode | |
+|---|---|
+| `read` | **Default.** Read the reply, with transport controls. |
+| `ack` | One line: what broke, what you must decide, else "Done." |
+| `model` | A side LLM writes a line using `announcePrompt`. |
+| `off` | Silence. The `tts` tool still works. |
+
+`ack` uses local bilingual heuristics — zero tokens, zero latency. It
+classifies the turn and speaks at most one line:
 
 | Verdict | What you hear |
 |---|---|
@@ -103,12 +111,8 @@ one line:
 | `decision` | The choice you have to make. |
 | `question` | The question, verbatim. |
 | `finding` | The surprising bit. |
-| `routine` | "Done." — four characters, so you know the turn ended. |
+| `routine` | "Done." — so you know the turn ended. |
 | `silent` | Nothing. |
-
-Detection runs on local heuristics in both English and Chinese. Zero tokens,
-zero latency, no extra model call. If you would rather have an LLM write the
-line, set `announce` to `"model"` and edit `announcePrompt`.
 
 Markdown, code blocks, file paths, URLs, and commit hashes are stripped before
 anything is spoken. Nobody wants to hear a path read out character by character.
@@ -121,10 +125,10 @@ defaults.
 ```json
 {
   "enabled": true,
-  "enVoice": "Ava (Premium)",
+  "enVoice": "Zoe (Premium)",
   "zhVoice": "Yue (Premium)",
   "speed": 1.0,
-  "announce": "rules",
+  "announce": "read",
   "maxAnnounceChars": 240
 }
 ```
@@ -133,10 +137,10 @@ defaults.
 |---|---|
 | `enVoice` / `zhVoice` | Any name from `say -v '?'`. |
 | `speed` | Multiplier on 190 wpm. |
-| `announce` | `rules` (local, default), `model` (LLM writes it), `off`. |
+| `announce` | `read` (default), `ack`, `model`, `off`. |
 | `announcePrompt` | System prompt, only used when `announce` is `model`. |
 | `announceModel` | `{ "provider": "...", "id": "..." }`, defaults to the session model. |
-| `maxAnnounceChars` | Hard cap on an auto-spoken line. |
+| `maxAnnounceChars` | Hard cap on a line spoken in `ack` mode. |
 
 Changes made through `/say` apply to the current session only and are stored in
 the session log, so a branch keeps its own setting. Edit the file to change the
@@ -154,9 +158,9 @@ pi -e ./extensions/index.ts
 | File | |
 |---|---|
 | `extensions/text.ts` | Markdown stripping, script segmentation. Pure. |
-| `extensions/announce.ts` | The rule engine that decides what to say. Pure. |
+| `extensions/announce.ts` | The `ack` rule engine. Pure. |
 | `extensions/reader.ts` | Sentence splitting, interruptible transport. |
-| `extensions/read-along.ts` | The `/read` TUI component. |
+| `extensions/read-along.ts` | The transport bar. |
 | `extensions/speech.ts` | `say` invocation, WAV stitching, playback queue. |
 | `extensions/config.ts` | Types, defaults, load/save. |
 | `extensions/index.ts` | Tool, command, shortcut, event wiring. |
